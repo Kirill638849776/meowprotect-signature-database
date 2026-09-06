@@ -1,106 +1,92 @@
-name: 10 автоматических проверок
+name: Signature database checks
 
 on:
+  push:
+    branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  check1:
+  checks:
+    name: Validate repository
     runs-on: ubuntu-latest
     steps:
-      - name: Проверка синтаксиса
-        run: |
-          echo "🔍 Проверка синтаксиса..."
-          sleep 10s
-          echo "✅ Синтаксис корректен"
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  check2:
-    runs-on: ubuntu-latest
-    needs: check1
-    steps:
-      - name: Проверка зависимостей
+      - name: Check repository structure
         run: |
-          echo "📦 Проверка зависимостей..."
-          sleep 10s
-          echo "✅ Зависимости в порядке"
+          set -euo pipefail
+          test -d singatures
+          test -f singatures/singatures.txt
+          test -f README.md
+          test -f LICENSE.md
 
-  check3:
-    runs-on: ubuntu-latest
-    needs: check2
-    steps:
-      - name: Проверка стиля кода
+      - name: Check signature database
         run: |
-          echo "🎨 Проверка стиля кода..."
-          sleep 10s
-          echo "✅ Стиль кода OK"
+          set -euo pipefail
+          file=singatures/singatures.txt
+          test -s "$file"
+          if grep -n $'\r' "$file"; then exit 1; fi
+          if grep -nE '^[[:space:]]+$' "$file"; then exit 1; fi
+          if grep -nE '^[[:space:]]' "$file"; then exit 1; fi
+          if grep -nE '[[:space:]]+$' "$file"; then exit 1; fi
 
-  check4:
-    runs-on: ubuntu-latest
-    needs: check3
-    steps:
-      - name: Проверка безопасности
+      - name: Check duplicate signatures
         run: |
-          echo "🔒 Проверка безопасности..."
-          sleep 10s
-          echo "✅ Уязвимостей не найдено"
+          set -euo pipefail
+          duplicates="$(sort singatures/singatures.txt | uniq -d)"
+          if [[ -n "$duplicates" ]]; then
+            echo "Duplicate signatures found:"
+            printf '%s\n' "$duplicates"
+            exit 1
+          fi
 
-  check5:
-    runs-on: ubuntu-latest
-    needs: check4
-    steps:
-      - name: Проверка тестов
+      - name: Check for obvious secrets
         run: |
-          echo "🧪 Запуск тестов..."
-          sleep 10s
-          echo "✅ Все тесты пройдены"
+          set -euo pipefail
+          file=singatures/singatures.txt
+          if grep -nEi '(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|xox[baprs]-[A-Za-z0-9-]{20,})' "$file"; then
+            echo "Possible secret/token detected."
+            exit 1
+          fi
 
-  check6:
-    runs-on: ubuntu-latest
-    needs: check5
-    steps:
-      - name: Проверка покрытия кода
+      - name: Validate documentation
         run: |
-          echo "📊 Проверка покрытия кода..."
-          sleep 10s
-          echo "✅ Покрытие 100%"
+          set -euo pipefail
+          test -s README.md
+          grep -q '^#' README.md
+          test -s LICENSE.md
+          grep -qi 'permission is hereby granted' LICENSE.md
 
-  check7:
-    runs-on: ubuntu-latest
-    needs: check6
-    steps:
-      - name: Проверка производительности
+      - name: Validate workflow files
         run: |
-          echo "⚡ Проверка производительности..."
-          sleep 10s
-          echo "✅ Производительность в норме"
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          for path in Path('.github/workflows').glob('*.y*ml'):
+              text = path.read_text(encoding='utf-8')
+              if not re.search(r'^name:\s*.+$', text, re.MULTILINE):
+                  raise SystemExit(f'{path}: missing name')
+              if not re.search(r'^jobs:\s*$', text, re.MULTILINE):
+                  raise SystemExit(f'{path}: missing jobs')
+          PY
 
-  check8:
-    runs-on: ubuntu-latest
-    needs: check7
-    steps:
-      - name: Проверка совместимости
+      - name: Check file sizes
         run: |
-          echo "🔄 Проверка совместимости..."
-          sleep 10s
-          echo "✅ Совместимость подтверждена"
+          set -euo pipefail
+          max_bytes=$((5 * 1024 * 1024))
+          while IFS= read -r -d '' file; do
+            size=$(stat -c%s "$file")
+            if (( size > max_bytes )); then
+              echo "File is larger than 5 MiB: $file"
+              exit 1
+            fi
+          done < <(find . -type f -not -path './.git/*' -print0)
 
-  check9:
-    runs-on: ubuntu-latest
-    needs: check8
-    steps:
-      - name: Проверка документации
-        run: |
-          echo "📄 Проверка документации..."
-          sleep 10s
-          echo "✅ Документация обновлена"
-
-  check10:
-    runs-on: ubuntu-latest
-    needs: check9
-    steps:
-      - name: Автоматическая проверка
-        run: |
-          echo "🤖 Автоматическая проверка..."
-          sleep 10s
-          echo "❌ Автоматическая проверка не прошла!"
-          exit 1
+      - name: All checks passed
+        run: echo "All repository checks passed."
